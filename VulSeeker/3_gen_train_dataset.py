@@ -37,21 +37,22 @@ index_count = 0
 for program in config.STEP3_PORGRAM_ARR:
     tempdir = config.FEA_DIR + os.sep + str(program)
     filters = glob.glob(config.FEA_DIR + os.sep + str(program) + os.sep + "*")
+    print(program,tempdir,filters)
     for i in filters:
         if os.path.isdir(i):
             index_uuid.setdefault(str(index_count), i.split(os.sep)[-1])
-            print index_count
+            print(index_count)
             index_count = index_count + 1
 
 func_list_arr = []
 func_list_dict = {}
 for k,v in index_uuid.items():
-    if not os.path.exists(config.FEA_DIR + os.sep + str(program) + os.sep + v + "/functions_list.csv"):
+    if not os.path.exists(config.FEA_DIR + os.sep + str(program) + os.sep + v + "/functions_list_fea.csv"):
         continue
     with open(config.FEA_DIR + os.sep + str(program) + os.sep + v + "/functions_list_fea.csv", "r") as fp:
-        print "gen_dataset : ",config.FEA_DIR + os.sep + str(program) + os.sep + v + "/functions_list.csv"
+        print("gen_dataset : ",config.FEA_DIR + os.sep + str(program) + os.sep + v + "/functions_list_fea.csv")
         for line in csv.reader(fp):
-            print line
+            print(line)
             if line[0] == "":
                 continue
             if block_num_max > 0:
@@ -67,13 +68,13 @@ for k,v in index_uuid.items():
                 func_list_arr.append(line[0])
                 func_list_dict.setdefault(line[0],value)
 
-
+print('func_list_arr:',func_list_arr)
 # coreutils6.5_mipsel64_gcc4.9_o0/ceil_lg,coreutils6.5_x64_gcc5.5_o0/ceil_lg,1
 random.shuffle(func_list_arr)
 func_list_test = []
 func_list_train = []
 func_list_vaild = []
-for i in xrange(len(func_list_arr)):
+for i in range(len(func_list_arr)):
     if i%12==0:
         func_list_test.append(func_list_arr[i])
     elif i%12==1:
@@ -85,83 +86,36 @@ train_fp = open(train_file, "w")
 test_fp = open(test_file, "w")
 vaild_fp = open(vaild_file, "w")
 
-count = 0 #记录样本总量
-cur_num = 0 #记录当前轮次 正例/负例 数量
-while count < train_dataset_num:
-    # 生成正例
-    if cur_num < pos_num:
-        random_func = random.sample(func_list_train,1)
-        value = func_list_dict.get(random_func[0])
-        select_list = value.split(',')
-        if(len(select_list)<2):
-            continue
-        selected_list = random.sample(select_list,2)
-        train_fp.write(selected_list[0]+","+selected_list[1]+",1\n")
-    # 生成负例
-    elif cur_num < pos_num + neg_num:
-        random_func = random.sample(func_list_train,2)
-        value1 = func_list_dict.get(random_func[0])
-        select_list1 = value1.split(',')
-        value2 = func_list_dict.get(random_func[1])
-        select_list2 = value2.split(',')
-        selected_list1 = random.sample(select_list1,1)
-        selected_list2 = random.sample(select_list2,1)
-        train_fp.write(selected_list1[0]+","+selected_list2[0]+",-1\n")
-    cur_num += 1
-    count += 1
-    if cur_num == pos_num+neg_num:
-        cur_num=0
 
-count = 0 #记录样本总量
-cur_num = 0 #记录当前轮次 正例/负例 数量
-while count < test_dataset_num:
-    # 生成正例
-    if cur_num < pos_num:
-        random_func = random.sample(func_list_test,1)
-        value = func_list_dict.get(random_func[0])
-        select_list = value.split(',')
-        if(len(select_list)<2):
-            continue
-        selected_list = random.sample(select_list,2)
-        test_fp.write(selected_list[0]+","+selected_list[1]+",1\n")
-    # 生成负例
-    elif cur_num < pos_num + neg_num:
-        random_func = random.sample(func_list_test,2)
-        value1 = func_list_dict.get(random_func[0])
-        select_list1 = value1.split(',')
-        value2 = func_list_dict.get(random_func[1])
-        select_list2 = value2.split(',')
-        selected_list1 = random.sample(select_list1,1)
-        selected_list2 = random.sample(select_list2,1)
-        test_fp.write(selected_list1[0]+","+selected_list2[0]+",-1\n")
-    cur_num += 1
-    count += 1
-    if cur_num == pos_num+neg_num:
-        cur_num=0
+def gen_set(func_list, file_fp):
+    count = 0 #记录样本总量
+    cur_num = 0 #记录当前轮次 正例/负例 数量
+    while count < train_dataset_num:
+        # 生成正例
+        if cur_num < pos_num:
+            print(func_list)
+            random_func = random.sample(func_list,1)
+            value = func_list_dict.get(random_func[0])
+            select_list = value.split(',')
+            if(len(select_list)<2):
+                continue
+            selected_list = random.sample(select_list,2)
+            train_fp.write(selected_list[0]+","+selected_list[1]+",1\n")
+        # 生成负例
+        elif cur_num < pos_num + neg_num:
+            random_func = random.sample(func_list,2)
+            value1 = func_list_dict.get(random_func[0])# 一个function
+            select_list1 = value1.split(',')
+            value2 = func_list_dict.get(random_func[1])# 另一个function
+            select_list2 = value2.split(',')
+            selected_list1 = random.sample(select_list1,1)
+            selected_list2 = random.sample(select_list2,1)
+            train_fp.write(selected_list1[0]+","+selected_list2[0]+",-1\n")
+        cur_num += 1
+        count += 1
+        if cur_num == pos_num+neg_num:
+            cur_num=0
 
-count = 0 #记录样本总量
-cur_num = 0 #记录当前轮次 正例/负例 数量
-while count < vaild_dataset_num:
-    # 生成正例
-    if cur_num < pos_num:
-        random_func = random.sample(func_list_vaild,1)
-        value = func_list_dict.get(random_func[0])
-        select_list = value.split(',')
-        if(len(select_list)<2):
-            continue
-        selected_list = random.sample(select_list,2)
-        vaild_fp.write(selected_list[0]+","+selected_list[1]+",1\n")
-    # 生成负例
-    elif cur_num < pos_num + neg_num:
-        random_func = random.sample(func_list_vaild,2)
-        value1 = func_list_dict.get(random_func[0])
-        select_list1 = value1.split(',')
-        value2 = func_list_dict.get(random_func[1])
-        select_list2 = value2.split(',')
-        selected_list1 = random.sample(select_list1,1)
-        selected_list2 = random.sample(select_list2,1)
-        vaild_fp.write(selected_list1[0]+","+selected_list2[0]+",-1\n")
-    cur_num += 1
-    count += 1
-    if cur_num == pos_num+neg_num:
-        cur_num=0
+gen_set(func_list_train, train_fp)
+gen_set(func_list_test, test_fp)
+gen_set(func_list_vaild, vaild_fp)

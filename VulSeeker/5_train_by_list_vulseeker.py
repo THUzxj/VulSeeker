@@ -3,7 +3,6 @@
 
 import tensorflow as tf
 import numpy as np
-import csv
 import time
 from sklearn.metrics import roc_curve
 from sklearn.metrics import auc
@@ -16,7 +15,7 @@ T = 5  # iteration
 N = 2  # embedding_depth
 P = 64  # embedding_size
 D = 8  # dimensional,feature num
-B = 10 # mini-batch
+batch_size = 10 # mini-batch
 lr = 0.0001  # learning_rate
 # MAX_SIZE = 0 # record the max number of a function's block
 max_iter = 100
@@ -28,14 +27,10 @@ is_debug = True
 train_num = config.TRAIN_DATASET_NUM
 valid_num = int(train_num/10)
 test_num = int(train_num/10)
-# PREFIX = "_coreutils_1000"
-# TRAIN_TFRECORD="TFrecord/train_vulSeeker_data"+PREFIX+".tfrecord"
-# TEST_TFRECORD="TFrecord/test_vulSeeker_data"+PREFIX+".tfrecord"
-# VALID_TFRECORD="TFrecord/valid_vulSeeker_data"+PREFIX+".tfrecord"
 PREFIX = "_"+str(config.TRAIN_DATASET_NUM)+"_["+'_'.join(config.STEP3_PORGRAM_ARR)+"]"
-TRAIN_TFRECORD = config.TFRECORD_GEMINI_DIR + os.sep + "train_"+PREFIX+".tfrecord"
-TEST_TFRECORD = config.TFRECORD_GEMINI_DIR + os.sep + "test_"+PREFIX+".tfrecord"
-VALID_TFRECORD = config.TFRECORD_GEMINI_DIR + os.sep + "valid_"+PREFIX+".tfrecord"
+TRAIN_TFRECORD = config.TFRECORD_VULSEEKER_DIR + os.sep + "train_"+PREFIX+".tfrecord"
+TEST_TFRECORD = config.TFRECORD_VULSEEKER_DIR + os.sep + "test_"+PREFIX+".tfrecord"
+VALID_TFRECORD = config.TFRECORD_VULSEEKER_DIR + os.sep + "valid_"+PREFIX+".tfrecord"
 
 # =============== convert the real data to training data ==============
 #       1.  construct_learning_dataset() combine the dataset list & real data
@@ -43,7 +38,7 @@ VALID_TFRECORD = config.TFRECORD_GEMINI_DIR + os.sep + "valid_"+PREFIX+".tfrecor
 #       1-1-1. convert_graph_to_adj_matrix()    process each cfg
 #       1-2. generate_features_pair() traversal list and construct all functions' feature map
 # =====================================================================
-""" Parameter P = 64, D = 8, T = 7, N = 2,                  B = 10
+""" Parameter P = 64, D = 8, T = 7, N = 2,                  batch_size = 10
      X_v = D * 1   <--->   8 * v_num * 10
      W_1 = P * D   <--->   64* 8    W_1 * X_v = 64*1
     mu_0 = P * 1   <--->   64* 1
@@ -74,7 +69,7 @@ def structure2vec_net(cdfgs, x, v_num):
     with tf.variable_scope("structure2vec_net") as structure2vec_net:
         B_mu_5 = tf.Variable(tf.zeros(shape = [0, P]), trainable=False)
         w_2 = tf.get_variable('w_2', [P, P], tf.float32, tf.truncated_normal_initializer(mean=0.0, stddev=0.1))
-        for i in range(B):
+        for i in range(batch_size):
             cur_size = tf.to_int32(v_num[i][0])
             # test = tf.slice(B_mu_0[i], [0, 0], [cur_size, P])
             mu_0 = tf.reshape(tf.zeros(shape = [2*cur_size, P]),(2*cur_size,P))
@@ -99,11 +94,6 @@ def calculate_auc(labels, predicts):
     return AUC
 
 def contrastive_loss(labels, distance):
-    #    tmp= y * tf.square(d)
-    #    #tmp= tf.mul(y,tf.square(d))
-    #    tmp2 = (1-y) * tf.square(tf.maximum((1 - d),0))
-    #    return tf.reduce_sum(tmp +tmp2)/B/2
-    #    print "contrastive_loss", y,
     loss = tf.to_float(tf.reduce_sum(tf.square(distance - labels)))
     return loss
 
@@ -123,14 +113,15 @@ def compute_accuracy(prediction, labels):
 
 def cal_distance(model1, model2):
     a_b = tf.reduce_sum(tf.reshape(tf.reduce_prod(tf.concat([tf.reshape(model1,(1,-1)),
-                                                             tf.reshape(model2,(1,-1))],0),0),(B,P)),1,keep_dims=True)
+                                                             tf.reshape(model2,(1,-1))],0),0),(batch_size,P)),1,keep_dims=True)
     a_norm = tf.sqrt(tf.reduce_sum(tf.square(model1),1,keep_dims=True))
     b_norm = tf.sqrt(tf.reduce_sum(tf.square(model2),1,keep_dims=True))
     distance = a_b/tf.reshape(tf.reduce_prod(tf.concat([tf.reshape(a_norm,(1,-1)),
-                                                        tf.reshape(b_norm,(1,-1))],0),0),(B,1))
+                                                        tf.reshape(b_norm,(1,-1))],0),0),(batch_size,1))
     return distance
 
 def read_and_decode(filename):
+    print filename
     #根据文件名生成一个队列
     filename_queue = tf.train.string_input_producer([filename])
     # create a reader from file queue
@@ -149,33 +140,21 @@ def read_and_decode(filename):
         'num2': tf.FixedLenFeature([], tf.int64),
         'max': tf.FixedLenFeature([], tf.int64)})
 
+    print features
+
     label = tf.cast(features['label'], tf.int32)
 
     cfg_1 = features['cfg_1']
     cfg_2 = features['cfg_2']
-    #adj_arr = np.reshape((adj_str.split(',')),(-1,D))
-    #graph_1 = adj_arr.astype(np.float32)
-
-    #adj_arr = np.reshape((adj_str.split(',')),(-1,D))
-    #graph_2 = adj_arr.astype(np.float32)
 
     dfg_1 = features['dfg_1']
     dfg_2 = features['dfg_2']
-    #adj_arr = np.reshape((adj_str.split(',')),(-1,D))
-    #graph_1 = adj_arr.astype(np.float32)
-
-    #adj_arr = np.reshape((adj_str.split(',')),(-1,D))
-    #graph_2 = adj_arr.astype(np.float32)
 
     num1 = tf.cast(features['num1'], tf.int32)
     fea_1 = features['fea_1']
-    #fea_arr = np.reshape((fea_str.split(',')),(node_num,node_num))
-    #feature_1 = fea_arr.astype(np.float32)
 
     num2 =  tf.cast(features['num2'], tf.int32)
     fea_2 = features['fea_2']
-    #fea_arr = np.reshape(fea_str.split(','),(node_num,node_num))
-    #feature_2 = fea_arr.astype(np.float32)
 
     max_num = tf.cast(features['max'], tf.int32)
 
@@ -184,18 +163,18 @@ def read_and_decode(filename):
 
 def get_batch( label, cfg_str1, cfg_str2, dfg_str1, dfg_str2, fea_str1, fea_str2, num1, num2, max_num):
 
-    y = np.reshape(label, [B, 1])
+    y = np.reshape(label, [batch_size, 1])
 
     v_num_1 = []
     v_num_2 = []
-    for i in range(B):
+    for i in range(batch_size):
         v_num_1.append([int(num1[i])])
         v_num_2.append([int(num2[i])])
 
     # 补齐 martix 矩阵的长度
     cdfg_1 = []
     cdfg_2 = []
-    for i in range(B):
+    for i in range(batch_size):
         cfg_arr = np.array(cfg_str1[i].split(','))
         cfg_adj = np.reshape(cfg_arr, (int(num1[i]), int(num1[i])))
         cfg_ori1 = cfg_adj.astype(np.float32)
@@ -227,7 +206,7 @@ def get_batch( label, cfg_str1, cfg_str2, dfg_str1, dfg_str2, fea_str1, fea_str2
     # 补齐 feature 列表的长度
     fea_1 = []
     fea_2 = []
-    for i in range(B):
+    for i in range(batch_size):
         fea_arr = np.array(fea_str1[i].split(','))
         fea_ori = fea_arr.astype(np.float32)
         fea_ori1 = np.resize(fea_ori,(np.max(v_num_1),D))
@@ -254,15 +233,15 @@ init = tf.global_variables_initializer()
 global_step = tf.Variable(0, trainable=False)
 learning_rate = tf.train.exponential_decay(lr, global_step, decay_steps, decay_rate, staircase=True)
 
-v_num_left = tf.placeholder(tf.float32, shape=[B, 1], name='v_num_left')
-cdfg_left = tf.placeholder(tf.float32, shape=([B, None, None]), name='cdfg_left')
-fea_left = tf.placeholder(tf.float32, shape=([B, None, D]), name='fea_left')
+v_num_left = tf.placeholder(tf.float32, shape=[batch_size, 1], name='v_num_left')
+cdfg_left = tf.placeholder(tf.float32, shape=([batch_size, None, None]), name='cdfg_left')
+fea_left = tf.placeholder(tf.float32, shape=([batch_size, None, D]), name='fea_left')
 
-v_num_right = tf.placeholder(tf.float32, shape=[B, 1], name='v_num_right')
-cdfg_right = tf.placeholder(tf.float32, shape=([B, None, None]), name='cdfg_right')
-fea_right = tf.placeholder(tf.float32, shape=([B, None, D]), name='fea_right')
+v_num_right = tf.placeholder(tf.float32, shape=[batch_size, 1], name='v_num_right')
+cdfg_right = tf.placeholder(tf.float32, shape=([batch_size, None, None]), name='cdfg_right')
+fea_right = tf.placeholder(tf.float32, shape=([batch_size, None, D]), name='fea_right')
 
-labels = tf.placeholder(tf.float32, shape=([B, 1]), name='gt')
+labels = tf.placeholder(tf.float32, shape=([batch_size, 1]), name='gt')
 
 dropout_f = tf.placeholder("float")
 
@@ -283,7 +262,7 @@ batch_train_label, batch_train_cfg_1, batch_train_cfg_2, batch_train_dfg_1, batc
 batch_train_fea_2, batch_train_num1, batch_train_num2, batch_train_max  \
     = tf.train.batch([list_train_label, list_train_cfg_1, list_train_cfg_2, list_train_dfg_1, list_train_dfg_2,
                       list_train_fea_1, list_train_fea_2, list_train_num1, list_train_num2, list_train_max],
-                     batch_size=B, capacity=10)
+                     batch_size=batch_size, capacity=10)
 
 list_valid_label, list_valid_cfg_1, list_valid_cfg_2, list_valid_dfg_1, list_valid_dfg_2, list_valid_fea_1, \
 list_valid_fea_2, list_valid_num1, list_valid_num2, list_valid_max = read_and_decode(VALID_TFRECORD)
@@ -291,7 +270,7 @@ batch_valid_label, batch_valid_cfg_1, batch_valid_cfg_2, batch_valid_dfg_1, batc
 batch_valid_fea_2, batch_valid_num1, batch_valid_num2, batch_valid_max  \
     = tf.train.batch([list_valid_label, list_valid_cfg_1, list_valid_cfg_2, list_valid_dfg_1, list_valid_dfg_2,
                       list_valid_fea_1, list_valid_fea_2, list_valid_num1, list_valid_num2, list_valid_max],
-                     batch_size=B, capacity=10)
+                     batch_size=batch_size, capacity=10)
 
 list_test_label, list_test_cfg_1, list_test_cfg_2, list_test_dfg_1, list_test_dfg_2, list_test_fea_1, \
 list_test_fea_2, list_test_num1, list_test_num2, list_test_max = read_and_decode(TEST_TFRECORD)
@@ -299,7 +278,7 @@ batch_test_label, batch_test_cfg_1, batch_test_cfg_2, batch_test_dfg_1, batch_te
 batch_test_fea_2, batch_test_num1, batch_test_num2, batch_test_max  \
     = tf.train.batch([list_test_label, list_test_cfg_1, list_test_cfg_2, list_test_dfg_1, list_test_dfg_2,
                       list_test_fea_1, list_test_fea_2, list_test_num1, list_test_num2, list_test_max],
-                     batch_size=B, capacity=10)
+                     batch_size=batch_size, capacity=10)
 ''''''
 init_opt = tf.global_variables_initializer()
 saver = tf.train.Saver()
@@ -313,7 +292,7 @@ with tf.Session() as sess:
 # with tf.Session(config=tf.ConfigProto(device_count={'cpu':0})) as sess:
     writer = tf.summary.FileWriter('logs/', sess.graph)
     sess.run(init_opt)
-    if config.SETP5_IF_RESTORE_VULSEEKER_MODEL:
+    if config.STEP5_IF_RESTORE_VULSEEKER_MODEL:
         saver.restore(sess, config.MODEL_VULSEEKER_DIR + os.sep + config.STEP5_VULSEEKER_MODEL_TO_RESTORE)
     coord = tf.train.Coordinator()
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
@@ -323,7 +302,7 @@ with tf.Session() as sess:
         iter += 1
         avg_loss = 0.
         avg_acc = 0.
-        total_batch = int(train_num / B)
+        total_batch = int(train_num / batch_size)
         start_time = time.time()
         # Loop over all batches
         # get batch params label, graph_str1, graph_str2, feature_str1, feature_str2, num1, num2, max_nu
@@ -351,7 +330,7 @@ with tf.Session() as sess:
             avg_loss = 0.
             avg_acc = 0.
             valid_start_time = time.time()
-            for m in range(int(valid_num / B)):
+            for m in range(int(valid_num / batch_size)):
                 valid_label, valid_cfg_1, valid_cfg_2, valid_dfg_1, valid_dfg_2, valid_fea_1, valid_fea_2,  \
                 valid_num1, valid_num2, valid_max \
                     = sess.run([batch_valid_label, batch_valid_cfg_1, batch_valid_cfg_2, batch_valid_dfg_1,
@@ -370,14 +349,14 @@ with tf.Session() as sess:
                     print '     tr_acc %0.2f'%(tr_acc)
             duration = time.time() - valid_start_time
             print 'valid set, %d,  time, %f, loss, %0.5f, acc, %0.2f' % (
-                iter, duration, avg_loss / (int(valid_num / B)), avg_acc / (int(valid_num / B)))
+                iter, duration, avg_loss / (int(valid_num / batch_size)), avg_acc / (int(valid_num / batch_size)))
             saver.save(sess, config.MODEL_VULSEEKER_DIR + os.sep + "vulseeker-model"+PREFIX+"_"+str(iter)+".ckpt")
 
             total_labels = []
             total_predicts = []
             avg_loss = 0.
             avg_acc = 0.
-            test_total_batch = int(test_num / B)
+            test_total_batch = int(test_num / batch_size)
             start_time = time.time()
             # Loop over all batches
             # get batch params label, graph_str1, graph_str2, feature_str1, feature_str2, num1, num2, max_num
@@ -407,6 +386,5 @@ with tf.Session() as sess:
 
 # 保存模型
     saver.save(sess, config.MODEL_VULSEEKER_DIR + os.sep + "vulseeker-model"+PREFIX+"_final.ckpt")
-
     coord.request_stop()
     coord.join(threads)

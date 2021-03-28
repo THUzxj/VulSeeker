@@ -1,5 +1,12 @@
 
 # Repository of  VulSeeker
+
+## This fork will provide
+
+- Ida Pro 7 API support
+- More stable and clear code
+- Bug & Typo fix
+
 ## I. Introduction of VulSeeker
 It's a semantic learning based vulnerability search tool for cross-platform binary. Given a vulnerability function `f`, VulSeeker can identify whether a binary program contains the same vulnerability as `f`. Currently, it support six architectures, such as X86, X64, ARM32, ARM64, MIPS32, MIPS64. If you meet any problems, please feel free to email me at gaojian094@gmail.com.
 
