@@ -1,21 +1,24 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
-import sys
-sys.path.append("PYTHON_PATH\\Lib\\site-packages")
 import config
 import config_for_feature
 import networkx as nx
 import idaapi
 import idautils
 import idc
-import ida_pro
 import sys
 import os
 import time
+import shutil
 from miasm2.core.bin_stream_ida import bin_stream_ida
-from utils import guess_machine
+from miasm2.core.asmblock import expr_is_label, AsmLabel, is_int
+from miasm2.expression.simplifications import expr_simp
+from miasm2.analysis.data_flow import dead_simp
+from miasm2.ir.ir import AssignBlock, IRBlock
+from utils import guess_machine, expr2colorstr
+import re
 
-idaapi.auto_wait()
+idaapi.autoWait()
 
 bin_num = 0
 func_num = 0
@@ -24,8 +27,6 @@ function_list_fp = None
 functions=[]#由于windows文件名不区分大小写，这里记录已经分析的函数名（全部转换成小写，若重复，则添加当前时间戳作为后缀）
 
 curBinNum = 0
-
-# loc_db = LocationDB()
 
 class bbls:
 	id=""
@@ -42,11 +43,11 @@ def calConstantNumber(ea):
 	i = 0;
 	curStrNum = 0
 	numeric = 0
-	#print(idc.GetDisasm(ea)
+	#print idc.GetDisasm(ea)
 	while i <= 1:
-		if (idc.get_operand_type(ea,i ) == 5):
-			addr = idc.get_operand_value(ea, i)
-			if (idc.get_segm_name(addr) == '.rodata') and (idc.get_type(addr) == 'char[]') and (i == 1):
+		if (idc.GetOpType(ea,i ) == 5):
+			addr = idc.GetOperandValue(ea, i)
+			if (idc.SegName(addr) == '.rodata') and (idc.GetType(addr) == 'char[]') and (i == 1):
 				curStrNum = curStrNum + 1
 			else :
 				numeric = numeric + 1
@@ -64,9 +65,9 @@ def calBasicBlockFeature_vulseeker(block):
 	ConJumpNum = 0	# conditionJumpInstr
 	UnConJumpNum = 0  # unconditionJumpInstr
 	GeneicNum = 0  # genericInstr
-	curEA = block.start_ea
-	while curEA <= block.end_ea :
-		inst = idc.print_insn_mnem(curEA)
+	curEA = block.startEA
+	while curEA <= block.endEA :
+		inst = idc.GetMnem(curEA)
 		if inst in config_for_feature.VulSeeker_stackInstr:
 			StackNum = StackNum + 1
 		elif inst in config_for_feature.VulSeeker_arithmeticInstr:
@@ -86,11 +87,11 @@ def calBasicBlockFeature_vulseeker(block):
 		else:
 			GeneicNum = GeneicNum + 1
 
-		curEA = idc.next_head(curEA,block.end_ea)
+		curEA = idc.NextHead(curEA,block.endEA)
 		# elif inst in genericInstr:
 		#	  GeneicNum = GeneicNum + 1
 		# else:
-		#	  print("+++++++++", inst.insn.mnemonic,
+		#	  print "+++++++++", inst.insn.mnemonic,
 	fea_str =  str(StackNum) + "," + str(MathNum) + "," + str(LogicNum) + "," + str(CompareNum) + "," \
 			  + str(ExCallNum) + "," + str(ConJumpNum) + "," + str(UnConJumpNum) + "," + str(GeneicNum) + ","
 	return fea_str
@@ -104,28 +105,28 @@ def calBasicBlockFeature_gemini(block):
 	InstrNum = 0
 	arithNum = 0
 	logicNum = 0
-	curEA = block.start_ea
-	while curEA <= block.end_ea :
+	curEA = block.startEA
+	while curEA <= block.endEA :
 		#	数值常量 , 字符常量的数量
 		numer, stri = calConstantNumber(curEA)
 		numericNum = numericNum + numer
 		stringNum = stringNum + stri
 		#	转移指令的数量
-		if idc.print_insn_mnem(curEA) in config_for_feature.Gemini_allTransferInstr:
+		if idc.GetMnem(curEA) in config_for_feature.Gemini_allTransferInstr:
 			transferNum = transferNum + 1
 		# 调用的数量
-		if idc.print_insn_mnem(curEA) == 'call':
+		if idc.GetMnem(curEA) == 'call':
 			callNum = callNum + 1
 		# 指令的数量
 		InstrNum = InstrNum + 1
 		#	算术指令的数量
-		if idc.print_insn_mnem(curEA) in config_for_feature.Gemini_arithmeticInstr:
+		if idc.GetMnem(curEA) in config_for_feature.Gemini_arithmeticInstr:
 			arithNum = arithNum + 1
 		#  逻辑指令
-		if idc.print_insn_mnem(curEA) in config_for_feature.Gemini_logicInstr:
+		if idc.GetMnem(curEA) in config_for_feature.Gemini_logicInstr:
 			logicNum = logicNum + 1
 
-		curEA = idc.next_head(curEA,block.end_ea)
+		curEA = idc.NextHead(curEA,block.endEA)
 
 	fea_str = str(numericNum) + ","+str(stringNum) + ","+str(transferNum) + ","+str(callNum) + ","+str(InstrNum) + ","+str(arithNum) + ","+str(logicNum) + ","
 	return fea_str
@@ -134,7 +135,7 @@ def block_fea(allblock,fea_fp):
 	for block in allblock:
 		gemini_str = calBasicBlockFeature_gemini(block)
 		vulseeker_str = calBasicBlockFeature_vulseeker(block)
-		fea_str = str(hex(block.start_ea)) + "," + gemini_str + vulseeker_str + "\n"
+		fea_str = str(hex(block.startEA)) + "," + gemini_str + vulseeker_str + "\n"
 		fea_fp.write(fea_str)
 
 def build_dfg(DG,IR_blocks):
@@ -166,7 +167,7 @@ def build_dfg(DG,IR_blocks):
 		for i in in_value:
 			linenum+=1
 			# 分析每一行代码
-			# print(i
+			# print i
 			if '=' not in i or "call" in i or 'IRDst' in i:
 				continue
 
@@ -223,26 +224,24 @@ def build_dfg(DG,IR_blocks):
 										tempbbls.used[temps][1] = linenum
 								break
 
-		# print("addr",addr
-		# print("IR_blocks_dfg",IR_blocks_dfg
-		# print("IR_blocks_dfg[addr].defuse",IR_blocks_dfg[addr].defuse
+		# print "addr",addr
+		# print "IR_blocks_dfg",IR_blocks_dfg
+		# print "IR_blocks_dfg[addr].defuse",IR_blocks_dfg[addr].defuse
 
 	for cfgedge in DG.edges():
 		innode=str(cfgedge[0])
 		outnode=str(cfgedge[1])
-		# print("in out**"+innode+"**"+outnode
+		# print "in out**"+innode+"**"+outnode
 		if innode==outnode:
 			continue
-		# if IR_blocks_dfg.has_key(innode):
-		if innode in IR_blocks_dfg:
+		if IR_blocks_dfg.has_key(innode):
 			IR_blocks_dfg[innode].childnode.add(outnode)
-		# if IR_blocks_dfg.has_key(outnode):
-		if outnode in IR_blocks_dfg:
+		if IR_blocks_dfg.has_key(outnode):
 			IR_blocks_dfg[outnode].fathernode.add(innode)
 
 	# 找起始节点，记录每个基本块中定义的所有变量
 	cfg_nodes = DG.nodes()
-	# print("CFG nodes find father ",len(cfg_nodes)
+	# print "CFG nodes find father ",len(cfg_nodes)
 	# startnode = list(IR_blocks_dfg.keys())[0]
 	startnode = None
 	for addr,bbloks in IR_blocks_dfg.items():
@@ -250,12 +249,12 @@ def build_dfg(DG,IR_blocks):
 			continue
 		if len(cfg_nodes)==1 or startnode is None :#只有一个基本块	 或	形成整环
 			startnode = addr
-		# print(addr,addr in cfg_nodes,IR_blocks_dfg[addr].fathernode
+		# print addr,addr in cfg_nodes,IR_blocks_dfg[addr].fathernode
 		if addr in cfg_nodes and len(IR_blocks_dfg[addr].fathernode)==0:
 			startnode=addr
 		for definevar in IR_blocks_dfg[addr].defuse:
 			IR_blocks_dfg[addr].definedset.add(definevar)
-	# print("startnode	:",startnode
+	# print "startnode	:",startnode
 	if startnode is None:
 		return nx.DiGraph()
 	else:
@@ -275,8 +274,8 @@ def gen_dfg(IR_blocks_dfg,startnode):
 		visited2[key]=set()
 		visited3[key]=set()
 	visitorder=[]
-	# print("Visit!!", startnode
-	# print("startnode!!",startnode
+	# print "Visit!!", startnode
+	# print "startnode!!",startnode
 	IR_blocks_dfg[startnode].visited=True
 	visited[startnode] = '1'
 	visitorder.append(startnode)
@@ -284,10 +283,9 @@ def gen_dfg(IR_blocks_dfg,startnode):
 	while len(stack_list) > 0:
 		cur_node = stack_list[-1]
 		next_nodes = set()
-		#if IR_blocks_dfg.has_key(cur_node):
-		if cur_node in IR_blocks_dfg:
+		if IR_blocks_dfg.has_key(cur_node):
 			next_nodes = IR_blocks_dfg[cur_node].childnode
-		# print(len(stack_list),cur_node,"-->",next_nodes
+		# print len(stack_list),cur_node,"-->",next_nodes
 		if len(next_nodes) == 0:  # 叶子节点要回退
 			stack_list.pop()
 			visitorder.pop()
@@ -304,8 +302,7 @@ def gen_dfg(IR_blocks_dfg,startnode):
 						fathernodes=set()
 						usevar = {}
 						defined={}
-						#if IR_blocks_dfg.has_key(i):
-						if i in IR_blocks_dfg:
+						if IR_blocks_dfg.has_key(i):
 							# 列表：父节点
 							fathernodes=IR_blocks_dfg[i].fathernode
 							# 字典：基本块中使用的变量 出现的位置
@@ -325,24 +322,22 @@ def gen_dfg(IR_blocks_dfg,startnode):
 							if uvar not in definevar or usevar[uvar][0] < definevar[uvar][0]:
 								for fnode in fathernodes:
 									fdefinevarset = set()
-									#if IR_blocks_dfg.has_key(fnode):
-									if fnode in IR_blocks_dfg:
+									if IR_blocks_dfg.has_key(fnode):
 										fdefinevarset = IR_blocks_dfg[fnode].definedset
 									allfdefinevarset|=fdefinevarset
 									if uvar in fdefinevarset:
 										res_graph.add_edge(fnode, i)
-										print(fnode,'->',i,"var:",uvar)
+										print fnode,'->',i,"var:",uvar
 								# 可能存在和父亲的父亲节点之间的数据依赖,按照深度优先的遍历顺序反向找
 								for j in range(len(visitorder)-1,-1,-1):
 									visitednode=visitorder[j]
 									temp_definedset = set()
-									#if IR_blocks_dfg.has_key(visitednode):
-									if visitednode in IR_blocks_dfg:
+									if IR_blocks_dfg.has_key(visitednode):
 										temp_definedset = IR_blocks_dfg[visitednode].definedset
 									if uvar in temp_definedset - allfdefinevarset:
 										res_graph.add_edge(visitednode, i)
 										allfdefinevarset|=temp_definedset
-										print("fffff", visitednode, '->', i, "var:", uvar)
+										print "fffff", visitednode, '->', i, "var:", uvar
 
 						visited[i] = '1'
 						visitorder.append(i)
@@ -350,38 +345,37 @@ def gen_dfg(IR_blocks_dfg,startnode):
 							visited2[cur_node].remove(i)
 							visited3[cur_node].add(i)
 						temp_childnode = set()
-						#if IR_blocks_dfg.has_key(i):
-						if i in IR_blocks_dfg:
+						if IR_blocks_dfg.has_key(i):
 							temp_childnode = IR_blocks_dfg[i].childnode
 						visited2[cur_node] |=(set(temp_childnode) & set(visited) )-set(visited3[cur_node])
 						stack_list.append(i)
 	return res_graph
 
 def get_father_block(blocks, cur_block, yes_keys):
-	# print("find father block",cur_block.label
+	# print "find father block",cur_block.label
 	father_block = None
 	for temp_block in blocks:
-		# print(temp_block.get_next(),"<>",cur_block.label
+		# print temp_block.get_next(),"<>",cur_block.label
 		if temp_block.get_next() is cur_block.label:
 			father_block = temp_block
 	if father_block is None:
 		return None
 	is_Exist = False
 	for yes_label in yes_keys:
-		# print(father_block
-		# print(father_block.label
+		# print father_block
+		# print father_block.label
 		if ((str(father_block.label) + "L")).split(' ')[0].endswith(yes_label):
 			is_Exist = True
 	if not is_Exist:
-		# print("Not exist", ((str(father_block.label) + "L")).split(' ')[0]
+		# print "Not exist", ((str(father_block.label) + "L")).split(' ')[0]
 		father_block = get_father_block(blocks, father_block, yes_keys)
 		return father_block
 	else:
-		# print("exist", ((str(father_block.label) + "L")).split(' ')[0]
+		# print "exist", ((str(father_block.label) + "L")).split(' ')[0]
 		return father_block
 
 def rebuild_graph(cur_block, blocks, IR_blocks, no_ir):
-	# print(">>rebuild ", len(no_ir)
+	# print ">>rebuild ", len(no_ir)
 	yes_keys = list(IR_blocks.keys())
 	no_keys = list(no_ir.keys())
 	next_lable = (str(cur_block.label) + "L").split(' ')[0]
@@ -390,12 +384,12 @@ def rebuild_graph(cur_block, blocks, IR_blocks, no_ir):
 		for yes_label in yes_keys:
 			if ((str(father_block.label) + "L")).split(' ')[0].endswith(yes_label):
 				for no_label in no_keys:
-					# print("222", next_lable, no_label
+					# print "222", next_lable, no_label
 					if next_lable.endswith(no_label):
 						IR_blocks[yes_label].pop()
 						IR_blocks[yes_label].extend(IR_blocks[no_label])
-						# print("<<<del", no_label
-						# print("<<<len", len(no_ir)
+						# print "<<<del", no_label
+						# print "<<<len", len(no_ir)
 						del (no_ir[no_label])
 						del (IR_blocks[no_label])
 	return IR_blocks, no_ir
@@ -403,28 +397,23 @@ def rebuild_graph(cur_block, blocks, IR_blocks, no_ir):
 def dataflow_analysis(addr,block_items,DG):
 
 	machine = guess_machine()
+	mn, dis_engine, ira = machine.mn, machine.dis_engine, machine.ira
 	#
-	# print("Arch", dis_engine
+	# print "Arch", dis_engine
 	#
 	# fname = idc.GetInputFile()
-	# print("file name : ",fname
-	# print("machine",machine
+	# print "file name : ",fname
+	# print "machine",machine
 
 	bs = bin_stream_ida()
-	mdis = machine.dis_engine(bs)
+	mdis = dis_engine(bs)
 	mdis.dont_dis_retcall_funcs=[]
 	mdis.dont_dis=[]
-	ir_arch = machine.ira(mdis.symbol_pool)
-	#ir_arch = machine.ira(mdis.loc_db)
-	asmcfg = mdis.dis_multiblock(addr)
-	# blocks = asmcfg.blocks
-	blocks = asmcfg
-	#ircfg = ir_arch.new_ircfg()
+	ir_arch = ira(mdis.symbol_pool)
+	blocks = mdis.dis_multiblock(addr)
 	for block in blocks:
-		# API CHANGED
-		# ir_arch.add_asmblock_to_ircfg(block,ircfg)
 		ir_arch.add_block(block)
-		# print(">>asm block",block
+		# print ">>asm block",block
 
 	IRs = {}
 	for lbl, irblock in ir_arch.blocks.items():
@@ -432,59 +421,57 @@ def dataflow_analysis(addr,block_items,DG):
 		for assignblk in irblock:
 			for dst, src in assignblk.iteritems():
 				insr.append(str(dst) + "=" + str(src))
-		# print(">>ir",(str(lbl)+"L"),insr
+		# print ">>ir",(str(lbl)+"L"),insr
 		IRs[str(lbl).split(' ')[0]+"L"] = insr
 	# print	 "IRs.keys()",IRs.keys()
 
 	IR_blocks={}
 	no_ir = {}
-	# print("block_items",block_items
+	# print "block_items",block_items
 	for block in blocks:
-		# print("block.label",block.label
+		# print "block.label",block.label
 		isFind = False
-		# item = str(block.label).split(' ')[0]+ "L"
-		# block.label => block
-		item = str(block).split(' ')[0]+ "L"
+		item = str(block.label).split(' ')[0]+ "L"
 		# item = "0x"+(str(block.label).split(' ')[0].split(':')[1][2:]).lstrip('0') + "L"
-		# print("block line number",item
+		# print "block line number",item
 		for block_item in block_items:
-			# print(block_item
+			# print block_item
 			if item.endswith(block_item):
 				isFind = True
 
 		# for irlabel in IRs.keys():
-		#	  print(irlabel,item
+		#	  print irlabel,item
 		#	  if irlabel.endswith(item):
 		#		  itrm = irlabel
-		# print(item,IRs[str(block.label) + "L"]
-		if item in IRs:
+		# print item,IRs[str(block.label) + "L"]
+		if IRs.has_key(item):
 			if isFind:
 				IR_blocks[item] = IRs[item]
 			else:
 				IR_blocks[item] = IRs[item]
 				no_ir[item]= IRs[item]
-	# print("yes_ir : ",list(IR_blocks.keys())
+	# print "yes_ir : ",list(IR_blocks.keys())
 	no_keys = list(no_ir.keys())
-	# print("no_ir : ",no_keys
+	# print "no_ir : ",no_keys
 	for cur_label in no_keys:
 		cur_block = None
-		# print(""
-		# print(""
-		# print("find no_ir	 label is : ",cur_label
+		# print ""
+		# print ""
+		# print "find no_ir	 label is : ",cur_label
 		for block in blocks:
 			#去除loc_0000000000413D4C:0x00413d4cL callXXX的情况
-			temp_index = str(block).split(' ')[0]+"L"
-			# print(block.label,temp_index
+			temp_index = str(block.label).split(' ')[0]+"L"
+			# print block.label,temp_index
 			if temp_index.endswith(cur_label):
 				cur_block = block
 		if not cur_block is None:
-			# print("find no_ir ",cur_block
+			# print "find no_ir ",cur_block
 			IR_blocks, no_ir = rebuild_graph(cur_block,blocks,IR_blocks,no_ir)
-	# print(len(no_ir)
+	# print len(no_ir)
 	#
-	# save_file = "C:/AppData/Setup/IDA_Pro_v6.8/" + idc.get_func_name(addr) + ".txt"
+	# save_file = "C:/AppData/Setup/IDA_Pro_v6.8/" + idc.GetFunctionName(addr) + ".txt"
 	# fp = open(save_file, 'w')
-	# print("**********result*************"
+	# print "**********result*************"
 	#
 	# fp.write( str(DG.edges())	 + "\n")
 	# for in_label, in_value in IR_blocks.items():
@@ -495,15 +482,15 @@ def dataflow_analysis(addr,block_items,DG):
 	for key, value in IR_blocks.items():
 		if len(key.split(':'))>1:
 			key = key.split(':')[0] + ":0x"+key.split(':')[1].strip()[2:].lstrip('0')
-		# print("dg to dfg : ",key
+		# print "dg to dfg : ",key
 		IR_blocks_toDFG[key] = value
-	# print("IR_blocks_toDFG",IR_blocks_toDFG
-	# print("CFG edges <<",DG.number_of_edges(),">> :",DG.edges()
+	# print "IR_blocks_toDFG",IR_blocks_toDFG
+	# print "CFG edges <<",DG.number_of_edges(),">> :",DG.edges()
 	dfg = build_dfg(DG,IR_blocks_toDFG)
 	dfg.add_nodes_from(DG.nodes())
-	print("CFG edges <<",DG.number_of_edges(),">> :",DG.edges())
-	print("DFG edges <<",dfg.number_of_edges(),">> :",dfg.edges())
-	print("DFG nodes : ",dfg.number_of_nodes())
+	print "CFG edges <<",DG.number_of_edges(),">> :",DG.edges()
+	print "DFG edges <<",dfg.number_of_edges(),">> :",dfg.edges()
+	print "DFG nodes : ",dfg.number_of_nodes()
 	return dfg
 
 def main():
@@ -517,8 +504,8 @@ def main():
 		program = "CVE-2015-1791"
 		version = "DAP-1562_FIRMWARE_1.10"
 	else:
-		print(idc.ARGV[1])
-		print(idc.ARGV[2])
+		print idc.ARGV[1]
+		print idc.ARGV[2]
 		fea_path_origion = idc.ARGV[1]
 		fea_path_temp = idc.ARGV[1]+"\\temp"
 		bin_path = idc.ARGV[2]
@@ -527,30 +514,30 @@ def main():
 		version = idc.ARGV[4]
 
 
-	print("Directory path	：	", fea_path_origion)
+	print "Directory path	：	", fea_path_origion
 	function_list_file = fea_path_origion + os.sep + "functions_list_fea.csv"
 	function_list_fp = open(function_list_file, 'w')  # a 追加
 
 	textStartEA = 0
 	textEndEA = 0
 	for seg in idautils.Segments():
-		if (idc.get_segm_name(seg)==".text"):
-			textStartEA = idc.get_segm_start(seg)
-			textEndEA = idc.get_segm_end(seg)
+		if (idc.SegName(seg)==".text"):
+			textStartEA = idc.SegStart(seg)
+			textEndEA = idc.SegEnd(seg)
 			break
 
 	# 遍历文件中的所有指令，保存到文件
 	# 生成dict，将指令地址与指令id一一对应
-	print("遍历所有指令，生成instDict, inst_info")
+	print "遍历所有指令，生成instDict, inst_info"
 	for func in idautils.Functions(textStartEA, textEndEA):
 		# Ignore Library Code
-		flags = idc.get_func_attr(func, idc.FUNCATTR_FLAGS)
+		flags = idc.GetFunctionFlags(func)
 		if flags & idc.FUNC_LIB:
-			print(hex(func), "FUNC_LIB", idc.get_func_name(func))
+			print hex(func), "FUNC_LIB", idc.GetFunctionName(func)
 			continue
 
-		cur_function_name = idc.get_func_name(func)
-		print(cur_function_name)
+		cur_function_name = idc.GetFunctionName(func)
+		print cur_function_name
 		#if cur_function_name != "X509_NAME_get_text_by_NID":
 		#	 continue
 		
@@ -561,7 +548,7 @@ def main():
 				os.mkdir(fea_path)
 			#cur_function_name = cur_function_name + "_"+time.strftime('%Y%m%d%H%M%S',time.localtime(time.time()))
 		functions.append(cur_function_name.lower())
-		print(cur_function_name, "=====start")# 打印函数名
+		print cur_function_name, "=====start"# 打印函数名
 		'''	  
 			记录函数的控制流信息,生成CFG邻接表
 			每个txt中存放一个函数的控制流图, 命名方式:[函数名_cfg.txt]
@@ -575,23 +562,23 @@ def main():
 		block_items = []
 		DG = nx.DiGraph()
 		for idaBlock in allblock:
-			temp_str = str(hex(idaBlock.start_ea))
+			temp_str = str(hex(idaBlock.startEA))
 			block_items.append(temp_str[2:])
-			DG.add_node(hex(idaBlock.start_ea))
+			DG.add_node(hex(idaBlock.startEA))
 			for succ_block in idaBlock.succs():
-				DG.add_edge(hex(idaBlock.start_ea),hex(succ_block.start_ea))
+				DG.add_edge(hex(idaBlock.startEA),hex(succ_block.startEA))
 			for pred_block in idaBlock.preds():
-				DG.add_edge(hex(pred_block.start_ea),hex(idaBlock.start_ea))
-		# print(DG.edges()
-		# print(block_items
+				DG.add_edge(hex(pred_block.startEA),hex(idaBlock.startEA))
+		# print DG.edges()
+		# print block_items
 		for cfg_node in DG.nodes():
-			# print(cfg_node
+			# print cfg_node
 			cfg_str = str(cfg_node)
 			for edge in DG.succ[cfg_node]:
 				cfg_str = cfg_str + " " + edge
-					# print(hex(edge.addr),
-					# print(hex(cfg_node.addr, create_using=nx.DiGraph()),"---->",hex(edge.addr)  # 遍历所有边
-			# print("cfg_str",cfg_str
+					# print hex(edge.addr),
+					# print hex(cfg_node.addr, create_using=nx.DiGraph()),"---->",hex(edge.addr)  # 遍历所有边
+			# print "cfg_str",cfg_str
 			cfg_str = cfg_str + "\n"
 			cfg_fp.write(cfg_str)
 
@@ -609,7 +596,7 @@ def main():
 			dfg_str = dfg_node
 			for edge in dfg.succ[dfg_node]:
 				dfg_str = dfg_str + " " + edge
-			# print("dfg_str: ",dfg_str
+			# print "dfg_str: ",dfg_str
 			dfg_str = dfg_str + "\n"
 			dfg_fp.write(dfg_str)
 
@@ -630,14 +617,14 @@ def main():
 		inst_fp = open(inst_file, 'w')
 		for instru in idautils.FuncItems(func):
 			orig_fp.write(hex(instru)+","+idc.GetDisasm(instru)+"\n")
-			inst_fp.write(idc.print_insn_mnem(instru)+"\n")
+			inst_fp.write(idc.GetMnem(instru)+"\n")
 		'''
 
 		'''	  
 			记录函数概要信息，函数名，路径，基本块数量，控制流边的数量，数据流边的数量
 		'''
 
-		print(cur_function_name, "=====finish")	# 打印函数名
+		print cur_function_name, "=====finish"	# 打印函数名
 		# 函数名,基本块数量,数据流结点数量,控制流边数量,数据流边数量,所在程序名,版本编号,所在二进制文件路径
 		function_str = str(cur_function_name) + "," + str(DG.number_of_nodes()) +  "," + \
 						   str(DG.number_of_edges()) + "," + str(dfg.number_of_edges()) +  "," + \
@@ -650,12 +637,12 @@ def stdout_to_file(output_file_name, output_dir=None):
 	if not output_dir:
 		output_dir = os.path.dirname(os.path.realpath(__file__))
 	output_file_path = os.path.join(output_dir, output_file_name)
-	print(output_file_path)
-	print("original output start")
+	print output_file_path
+	print "original output start"
 	# save original stdout descriptor
 	orig_stdout = sys.stdout
 	# create output file
-	f = open(output_file_path, "w")
+	f = file(output_file_path, "w")
 	# set stdout to output file descriptor
 	sys.stdout = f
 	return f, orig_stdout
@@ -664,8 +651,8 @@ def stdout_to_file(output_file_name, output_dir=None):
 if __name__=='__main__':
 	f, orig_stdout = stdout_to_file("output_"+time.strftime('%Y%m%d%H%M%S',time.localtime(time.time()))+".txt")
 	main()
-	print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+	print "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 	sys.stdout = orig_stdout #recover the output to the console window
 	f.close()
 
-	ida_pro.qexit(0)
+	idc.Exit(0)
